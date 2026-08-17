@@ -1,0 +1,24 @@
+[package]
+name = "knot"
+version = "0.1.0"
+edition = "2021"
+authors = ["Knot Team"]
+description = "A Figma-grade multiplayer desktop environment"
+
+[[bin]]
+name = "knot-core"
+path = "src/main.rs"
+
+[dependencies]
+smithay = { version = "0.7.0", default-features = false, features = [
+    "backend_winit",
+    "backend_egl",
+    "desktop",
+    "wayland_frontend",
+    "renderer_glow",
+] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+anyhow = "1.0"
+clap = { version = "4.5", features = ["derive"] }
+glow = "0.16"
