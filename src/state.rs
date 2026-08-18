@@ -34,6 +34,7 @@ use smithay::{
 };
 use std::time::Instant;
 use tracing::{info, warn};
+use crate::launcher::{AppCatalog, AppEntry};
 use crate::seats::KnotSeatManager;
 
 #[derive(Default)]
@@ -41,6 +42,58 @@ pub struct KnotClientData {
     pub compositor_state: CompositorClientState,
 }
 impl ClientData for KnotClientData {}
+
+#[derive(Clone, Debug)]
+pub struct LauncherState {
+    pub is_open: bool,
+    pub selected_index: usize,
+    pub catalog: Vec<AppEntry>,
+    pub query: String,
+    pub parent_socket: String,
+}
+
+impl Default for LauncherState {
+    fn default() -> Self {
+        Self {
+            is_open: false,
+            selected_index: 0,
+            catalog: AppCatalog::default_catalog(),
+            query: String::new(),
+            parent_socket: "wayland-knot-0".to_string(),
+        }
+    }
+}
+
+impl LauncherState {
+    pub fn filtered_catalog(&self) -> Vec<AppEntry> {
+        let q = self.query.trim().to_lowercase();
+        if q.is_empty() {
+            return self.catalog.clone();
+        }
+
+        let matches: Vec<AppEntry> = self.catalog
+            .iter()
+            .filter(|app| {
+                app.title.to_lowercase().contains(&q)
+                    || app.description.to_lowercase().contains(&q)
+                    || app.command.to_lowercase().contains(&q)
+            })
+            .cloned()
+            .collect();
+
+        if matches.is_empty() {
+            vec![AppEntry {
+                id: 1,
+                title: format!("Run '{}'", self.query.trim()),
+                description: "Execute custom command inside Knot Island".to_string(),
+                command: self.query.trim().to_string(),
+                args: vec![],
+            }]
+        } else {
+            matches
+        }
+    }
+}
 
 pub struct KnotState {
     pub display_handle: DisplayHandle,
@@ -54,6 +107,7 @@ pub struct KnotState {
     pub shm_state: ShmState,
     pub seat_state: SeatState<KnotState>,
     pub seat_manager: KnotSeatManager,
+    pub launcher_state: LauncherState,
     pub drag_state: Option<(Window, Point<f64, Logical>)>,
     pub start_time: Instant,
     pub is_running: bool,
@@ -71,6 +125,7 @@ impl KnotState {
         let mut seat_state = SeatState::new();
 
         let seat_manager = KnotSeatManager::new(&dh, &mut seat_state);
+        let launcher_state = LauncherState::default();
 
         let space = Space::default();
         let popups = PopupManager::default();
@@ -97,9 +152,53 @@ impl KnotState {
             shm_state,
             seat_state,
             seat_manager,
+            launcher_state,
             drag_state: None,
             start_time: Instant::now(),
             is_running: true,
+        }
+    }
+
+    pub fn toggle_launcher(&mut self) {
+        self.launcher_state.is_open = !self.launcher_state.is_open;
+        if self.launcher_state.is_open {
+            self.launcher_state.selected_index = 0;
+            self.launcher_state.query.clear();
+            info!("🌟 [LAUNCHER OPENED] In-Compositor Application Palette opened");
+        } else {
+            info!("🚪 [LAUNCHER CLOSED]");
+        }
+    }
+
+    pub fn launcher_select_next(&mut self) {
+        let count = self.launcher_state.filtered_catalog().len();
+        if count > 0 {
+            self.launcher_state.selected_index = (self.launcher_state.selected_index + 1) % count;
+        }
+    }
+
+    pub fn launcher_select_prev(&mut self) {
+        let count = self.launcher_state.filtered_catalog().len();
+        if count > 0 {
+            if self.launcher_state.selected_index == 0 {
+                self.launcher_state.selected_index = count - 1;
+            } else {
+                self.launcher_state.selected_index -= 1;
+            }
+        }
+    }
+
+    pub fn launch_selected(&mut self) {
+        let idx = self.launcher_state.selected_index;
+        self.launch_filtered_index(idx);
+    }
+
+    pub fn launch_filtered_index(&mut self, index: usize) {
+        let filtered = self.launcher_state.filtered_catalog();
+        if let Some(app) = filtered.get(index).cloned() {
+            info!("🚀 [APP LAUNCHED VIA PALETTE] Spawning '{}' for active seat...", app.title);
+            let _ = AppCatalog::spawn_island_app(&self.launcher_state.parent_socket, &app);
+            self.launcher_state.is_open = false;
         }
     }
 }
@@ -182,8 +281,12 @@ impl XdgShellHandler for KnotState {
     }
 
     fn new_popup(&mut self, surface: PopupSurface, _positioner: PositionerState) {
-        if let Err(err) = self.popups.track_popup(PopupKind::Xdg(surface)) {
+        info!("✨ [NEW XDG POPUP] Tracking popup for surface: {:?}", surface.wl_surface().id());
+        if let Err(err) = self.popups.track_popup(PopupKind::Xdg(surface.clone())) {
             warn!("Failed to track popup: {:?}", err);
+        }
+        if let Err(err) = surface.send_configure() {
+            warn!("Failed to send popup configure: {:?}", err);
         }
     }
 

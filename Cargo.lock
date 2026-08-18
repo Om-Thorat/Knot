@@ -716,8 +716,13 @@ dependencies = [
  "clap",
  "glow",
  "smithay",
+ "smithay-client-toolkit",
+ "tempfile",
  "tracing",
  "tracing-subscriber",
+ "wayland-client",
+ "wayland-protocols",
+ "wayland-server",
 ]
 
 [[package]]

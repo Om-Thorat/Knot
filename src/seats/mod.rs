@@ -67,8 +67,16 @@ impl KnotSeatManager {
         &self.users[0]
     }
 
+    pub fn alice_mut(&mut self) -> &mut KnotUser {
+        &mut self.users[0]
+    }
+
     pub fn bob(&self) -> &KnotUser {
         &self.users[1]
+    }
+
+    pub fn bob_mut(&mut self) -> &mut KnotUser {
+        &mut self.users[1]
     }
 
     pub fn current_user(&self) -> &KnotUser {

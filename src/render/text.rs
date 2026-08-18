@@ -20,32 +20,26 @@ impl BadgeTextRenderer {
         }
     }
 
-    pub fn get_or_create_badge(
-        &mut self,
-        text: &str,
-        bg_rgba: [u8; 4],
-        fg_rgba: [u8; 4],
-    ) -> MemoryRenderBuffer {
-        let key = format!("{}_{:?}_{:?}", text, bg_rgba, fg_rgba);
-        if let Some(buf) = self.cache.get(&key) {
-            return buf.clone();
-        }
-
+    pub fn calculate_dimensions(text: &str) -> (i32, i32) {
         let padding_x = 10;
         let padding_y = 5;
         let char_count = text.chars().count();
         let width = (char_count * FONT_WIDTH + padding_x * 2) as i32;
         let height = (FONT_HEIGHT + padding_y * 2) as i32;
+        (width, height)
+    }
 
+    pub fn render_badge_pixels(
+        text: &str,
+        bg_rgba: [u8; 4],
+        fg_rgba: [u8; 4],
+    ) -> (i32, i32, Vec<u8>) {
+        let (width, height) = Self::calculate_dimensions(text);
         let mut pixels = vec![0u8; (width * height * 4) as usize];
-
-        // Draw background with subtle rounded corners
         let corner_radius = 4;
         for y in 0..height {
             for x in 0..width {
                 let idx = ((y * width + x) * 4) as usize;
-
-                // Corner distance check for rounded corners
                 let in_top_left = x < corner_radius && y < corner_radius && (corner_radius - x).pow(2) + (corner_radius - y).pow(2) > corner_radius.pow(2);
                 let in_top_right = x >= width - corner_radius && y < corner_radius && (x - (width - corner_radius)).pow(2) + (corner_radius - y).pow(2) > corner_radius.pow(2);
                 let in_bot_left = x < corner_radius && y >= height - corner_radius && (corner_radius - x).pow(2) + (y - (height - corner_radius)).pow(2) > corner_radius.pow(2);
@@ -57,21 +51,33 @@ impl BadgeTextRenderer {
                     pixels[idx + 2] = 0;
                     pixels[idx + 3] = 0;
                 } else {
-                    // ARGB / ABGR pixel ordering
-                    pixels[idx] = bg_rgba[0];     // R
-                    pixels[idx + 1] = bg_rgba[1]; // G
-                    pixels[idx + 2] = bg_rgba[2]; // B
-                    pixels[idx + 3] = bg_rgba[3]; // A
+                    pixels[idx] = bg_rgba[0];
+                    pixels[idx + 1] = bg_rgba[1];
+                    pixels[idx + 2] = bg_rgba[2];
+                    pixels[idx + 3] = bg_rgba[3];
                 }
             }
         }
-
-        // Draw text characters
         for (i, ch) in text.chars().enumerate() {
-            let char_x = (padding_x + i * FONT_WIDTH) as i32;
-            let char_y = padding_y as i32;
+            let char_x = (10 + i * FONT_WIDTH) as i32;
+            let char_y = 5 as i32;
             Self::draw_char(&mut pixels, width, char_x, char_y, ch, fg_rgba);
         }
+        (width, height, pixels)
+    }
+
+    pub fn get_or_create_badge(
+        &mut self,
+        text: &str,
+        bg_rgba: [u8; 4],
+        fg_rgba: [u8; 4],
+    ) -> MemoryRenderBuffer {
+        let key = format!("{}_{:?}_{:?}", text, bg_rgba, fg_rgba);
+        if let Some(buf) = self.cache.get(&key) {
+            return buf.clone();
+        }
+
+        let (width, height, pixels) = Self::render_badge_pixels(text, bg_rgba, fg_rgba);
 
         let mut buffer = MemoryRenderBuffer::new(
             Fourcc::Abgr8888,
