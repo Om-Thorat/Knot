@@ -1,4 +1,5 @@
 mod input;
+mod launcher;
 mod render;
 mod seats;
 mod state;
@@ -58,6 +59,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     };
 
     let mut state = KnotState::new(&display, event_loop.handle());
+    state.launcher_state.parent_socket = args.socket.clone();
     // Use Transform::Flipped180 to correct OpenGL inverted Y coordinates
     state.output.change_current_state(
         Some(mode),

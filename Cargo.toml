@@ -9,6 +9,14 @@ description = "A Figma-grade multiplayer desktop environment"
 name = "knot-core"
 path = "src/main.rs"
 
+[[bin]]
+name = "knot-island"
+path = "src/island/main.rs"
+
+[[bin]]
+name = "knot-run"
+path = "src/launcher/main.rs"
+
 [dependencies]
 smithay = { version = "0.7.0", default-features = false, features = [
     "backend_winit",
@@ -17,8 +25,13 @@ smithay = { version = "0.7.0", default-features = false, features = [
     "wayland_frontend",
     "renderer_glow",
 ] }
+smithay-client-toolkit = { version = "0.19", default-features = false }
+wayland-client = "0.31"
+wayland-server = "0.31"
+wayland-protocols = { version = "0.32", features = ["client", "server"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 anyhow = "1.0"
 clap = { version = "4.5", features = ["derive"] }
 glow = "0.16"
+tempfile = "3.10"

@@ -16,27 +16,89 @@ use crate::state::KnotState;
 pub struct KnotInputHandler;
 
 impl KnotInputHandler {
+    fn raw_to_char(raw: u32) -> Option<char> {
+        match raw {
+            65 => Some(' '),
+            24 => Some('q'),
+            25 => Some('w'),
+            26 => Some('e'),
+            27 => Some('r'),
+            28 => Some('t'),
+            29 => Some('y'),
+            30 => Some('u'),
+            31 => Some('i'),
+            32 => Some('o'),
+            33 => Some('p'),
+            38 => Some('a'),
+            39 => Some('s'),
+            40 => Some('d'),
+            41 => Some('f'),
+            42 => Some('g'),
+            43 => Some('h'),
+            44 => Some('j'),
+            45 => Some('k'),
+            46 => Some('l'),
+            52 => Some('z'),
+            53 => Some('x'),
+            54 => Some('c'),
+            55 => Some('v'),
+            56 => Some('b'),
+            57 => Some('n'),
+            58 => Some('m'),
+            10 => Some('1'),
+            11 => Some('2'),
+            12 => Some('3'),
+            13 => Some('4'),
+            14 => Some('5'),
+            15 => Some('6'),
+            16 => Some('7'),
+            17 => Some('8'),
+            18 => Some('9'),
+            19 => Some('0'),
+            20 => Some('-'),
+            60 => Some('.'),
+            59 => Some(','),
+            _ => None,
+        }
+    }
+
     pub fn handle_pointer_motion(state: &mut KnotState, location: Point<f64, Logical>) {
         let user = state.seat_manager.current_user_mut();
         user.location = location;
         let pointer = user.pointer.clone();
 
-        // Handle window drag/move if dragging
+        // Handle active window drag/move if dragging
         if let Some((ref window, offset)) = state.drag_state.clone() {
             let new_loc = Point::from(((location.x - offset.x) as i32, (location.y - offset.y) as i32));
             state.space.map_element(window.clone(), new_loc, false);
         }
 
+        // If launcher is open, update selected row on hover
+        if state.launcher_state.is_open {
+            let modal_x = 320.0;
+            let modal_w = 640.0;
+            let row_start_y = 192.0;
+
+            if location.x >= modal_x + 14.0 && location.x <= modal_x + modal_w - 14.0 && location.y >= row_start_y {
+                let row_idx = ((location.y - row_start_y) / 58.0) as usize;
+                let filtered = state.launcher_state.filtered_catalog();
+                if row_idx < filtered.len() {
+                    state.launcher_state.selected_index = row_idx;
+                }
+            }
+        }
+
         // Find surface and its global origin in compositor space
         let mut focus = None;
-        for window in state.space.elements() {
-            if let Some(win_loc) = state.space.element_location(window) {
-                let rel_point = location - win_loc.to_f64();
-                if let Some((surface, surf_offset)) = window.surface_under(rel_point, WindowSurfaceType::ALL) {
-                    // Global origin of the surface in compositor coordinates
-                    let surface_global_origin = win_loc.to_f64() + surf_offset.to_f64();
-                    focus = Some((surface, surface_global_origin));
-                    break;
+        if !state.launcher_state.is_open {
+            for window in state.space.elements() {
+                if let Some(win_loc) = state.space.element_location(window) {
+                    let rel_point = location - win_loc.to_f64();
+                    if let Some((surface, surf_offset)) = window.surface_under(rel_point, WindowSurfaceType::ALL) {
+                        let surface_global_origin = win_loc.to_f64() + surf_offset.to_f64();
+                        focus = Some((surface, surface_global_origin));
+                        break;
+                    }
                 }
             }
         }
@@ -52,7 +114,6 @@ impl KnotInputHandler {
             },
         );
 
-        // Crucial for Wayland v5+ clients: send frame delimiter!
         pointer.frame(state);
     }
 
@@ -71,6 +132,43 @@ impl KnotInputHandler {
             user_name, button, pressed, location.x, location.y
         );
 
+        // 1. Check if clicking on Top HUD [+ LAUNCH APP] Button
+        if pressed && button == 272 && location.x >= 650.0 && location.x <= 890.0 && location.y >= 10.0 && location.y <= 42.0 {
+            info!("🎯 [LAUNCHER BUTTON CLICKED] Toggling App Palette!");
+            state.toggle_launcher();
+            return;
+        }
+
+        // 2. Handle clicks when App Launcher is Open
+        if state.launcher_state.is_open {
+            if pressed && button == 272 {
+                let modal_x = 320.0;
+                let modal_w = 640.0;
+                let modal_y = 100.0;
+                let modal_h = 510.0;
+                let row_start_y = 192.0;
+
+                // Click inside catalog rows
+                if location.x >= modal_x + 14.0 && location.x <= modal_x + modal_w - 14.0 && location.y >= row_start_y && location.y <= modal_y + modal_h - 10.0 {
+                    let row_idx = ((location.y - row_start_y) / 58.0) as usize;
+                    let filtered = state.launcher_state.filtered_catalog();
+                    if row_idx < filtered.len() {
+                        info!("🚀 User clicked app row #{} in catalog: '{}'!", row_idx + 1, filtered[row_idx].title);
+                        state.launch_filtered_index(row_idx);
+                        return;
+                    }
+                }
+
+                // Click outside modal closes it
+                if location.x < modal_x || location.x > modal_x + modal_w || location.y < modal_y || location.y > modal_y + modal_h {
+                    state.launcher_state.is_open = false;
+                    info!("🚪 Clicked outside modal, closing launcher.");
+                    return;
+                }
+            }
+            return;
+        }
+
         pointer.button(
             state,
             &ButtonEvent {
@@ -85,7 +183,6 @@ impl KnotInputHandler {
             },
         );
 
-        // Send pointer frame delimiter
         pointer.frame(state);
 
         if pressed {
@@ -110,6 +207,16 @@ impl KnotInputHandler {
                 // Raise window to top
                 state.space.raise_element(&window, true);
 
+                // Check if clicking in the top titlebar / header region (y <= 42px) to initiate drag
+                let rel_y = location.y - loc.y as f64;
+                let rel_x = location.x - loc.x as f64;
+                let win_geo = window.geometry();
+
+                if button == 272 && rel_y <= 42.0 && rel_x < (win_geo.size.w as f64 - 100.0) {
+                    info!("✋ [HEADER DRAG INITIATED] Dragging window from titlebar");
+                    state.drag_state = Some((window.clone(), Point::from((location.x - loc.x as f64, location.y - loc.y as f64))));
+                }
+
                 // Set keyboard focus for THIS user seat
                 keyboard.set_focus(state, Some(surface), serial);
 
@@ -130,7 +237,6 @@ impl KnotInputHandler {
             state.drag_state = None;
         }
 
-        // Flush immediately to ensure zero-latency delivery
         let _ = state.display_handle.flush_clients();
     }
 
@@ -138,11 +244,74 @@ impl KnotInputHandler {
         let user = state.seat_manager.current_user();
         let keyboard = user.keyboard.clone();
         let serial = SERIAL_COUNTER.next_serial();
+        let raw = keycode.raw();
 
         info!(
-            "⌨️ [FORWARDING KEY] User: {} | Keycode: {:?} ({}) | Pressed: {}",
-            user.name, keycode, keycode.raw(), pressed
+            "⌨️ [KEY EVENT] User: {} | Keycode: {:?} (raw: {}) | Pressed: {}",
+            user.name, keycode, raw, pressed
         );
+
+        // Check for Super/Windows key (raw 133 or 125) to toggle launcher
+        if pressed && (raw == 133 || raw == 125) {
+            info!("🌟 [SUPER KEY] Toggling App Launcher!");
+            state.toggle_launcher();
+            return;
+        }
+
+        // Handle navigation and search typing when Launcher is open
+        if state.launcher_state.is_open {
+            if pressed {
+                match raw {
+                    // Escape (XKB 9 / evdev 1)
+                    9 | 1 => {
+                        state.launcher_state.is_open = false;
+                        info!("🚪 [ESC] Closing launcher modal.");
+                        return;
+                    }
+                    // Backspace (XKB 22 / evdev 14)
+                    22 | 14 => {
+                        state.launcher_state.query.pop();
+                        state.launcher_state.selected_index = 0;
+                        info!("🔍 [SEARCH BACKSPACE] Query: '{}'", state.launcher_state.query);
+                        return;
+                    }
+                    // Up Arrow (XKB 111 / evdev 103)
+                    111 | 103 => {
+                        state.launcher_select_prev();
+                        return;
+                    }
+                    // Down Arrow (XKB 116 / evdev 108)
+                    116 | 108 => {
+                        state.launcher_select_next();
+                        return;
+                    }
+                    // Enter / Return (XKB 36 / evdev 28)
+                    36 | 28 => {
+                        state.launch_selected();
+                        return;
+                    }
+                    _ => {
+                        // Quick 1-key launch with numbers if query is empty
+                        if state.launcher_state.query.is_empty() && (10..=16).contains(&raw) {
+                            let idx = (raw - 10) as usize;
+                            if idx < state.launcher_state.catalog.len() {
+                                state.launch_filtered_index(idx);
+                                return;
+                            }
+                        }
+
+                        // Otherwise append character to search query
+                        if let Some(ch) = Self::raw_to_char(raw) {
+                            state.launcher_state.query.push(ch);
+                            state.launcher_state.selected_index = 0;
+                            info!("🔍 [SEARCH TYPED] Query: '{}'", state.launcher_state.query);
+                            return;
+                        }
+                    }
+                }
+            }
+            return;
+        }
 
         keyboard.input::<(), _>(
             state,
@@ -157,7 +326,6 @@ impl KnotInputHandler {
             |_, _, _| FilterResult::Forward,
         );
 
-        // Flush immediately
         let _ = state.display_handle.flush_clients();
     }
 }
