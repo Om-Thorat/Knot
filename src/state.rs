@@ -109,6 +109,9 @@ pub struct KnotState {
     pub seat_manager: KnotSeatManager,
     pub launcher_state: LauncherState,
     pub drag_state: Option<(Window, Point<f64, Logical>)>,
+    pub network_port: u16,
+    pub connected_peers_count: usize,
+    pub needs_redraw: bool,
     pub start_time: Instant,
     pub is_running: bool,
 }
@@ -154,6 +157,9 @@ impl KnotState {
             seat_manager,
             launcher_state,
             drag_state: None,
+            network_port: 7447,
+            connected_peers_count: 0,
+            needs_redraw: true,
             start_time: Instant::now(),
             is_running: true,
         }
@@ -225,6 +231,7 @@ impl CompositorHandler for KnotState {
         on_commit_buffer_handler::<Self>(surface);
         self.popups.commit(surface);
         self.space.elements().for_each(|window| window.on_commit());
+        self.needs_redraw = true;
     }
 }
 
@@ -278,6 +285,7 @@ impl XdgShellHandler for KnotState {
 
         info!("📌 [MAPPING WINDOW] Space Element mapped at ({}, {})", x_pos, y_pos);
         self.space.map_element(window, (x_pos as i32, y_pos as i32), true);
+        let _ = self.display_handle.flush_clients();
     }
 
     fn new_popup(&mut self, surface: PopupSurface, _positioner: PositionerState) {

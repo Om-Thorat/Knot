@@ -9,8 +9,8 @@ echo "======================================================="
 echo "  🧪 RUNNING PROJECT KNOT TEST SUITE                  "
 echo "======================================================="
 
-echo "📦 1. Building all binaries (knot-core, knot-island, knot-run)..."
-cargo build --bin knot-core --bin knot-island --bin knot-run
+echo "📦 1. Building all binaries (knot-core, knot-island, knot-run, knot-client)..."
+cargo build --bin knot-core --bin knot-island --bin knot-run --bin knot-client
 
 echo "🧪 2. Running unit & integration tests..."
 cargo test --all -- --nocapture
