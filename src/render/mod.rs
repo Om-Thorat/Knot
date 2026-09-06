@@ -90,7 +90,7 @@ impl KnotRenderer {
         let active_theme_rgba = if active_user_id == 0 { [255, 64, 129, 255] } else { [0, 229, 255, 255] };
 
         // =========================================================================
-        // LAYER 1 (FRONT-MOST): Multiplayer Cursors & Floating User Tags
+        // LAYER 1 (FRONT-MOST): Multiplayer Cursors & Floating User Tags & Chat
         // =========================================================================
         let draw_cursor = |elements: &mut Vec<KnotRenderElement>, pos: Point<f64, smithay::utils::Logical>, color: Color32F| {
             let px = pos.x as i32;
@@ -108,8 +108,23 @@ impl KnotRenderer {
             elements.push(Self::create_rect(px + 2, py + 2, 16, 16, shadow_color));
         };
 
-        // Render Alice Cursor (Pink) + "ALICE" Badge
+        // Render Alice Cursor (Pink) + "ALICE" Badge + Cursor Chat
         let alice_pos = state.seat_manager.alice().location;
+        if let Some(chat) = state.seat_manager.alice().active_cursor_chat() {
+            let chat_label = format!("💬 {}", chat);
+            let chat_buf = self.badge_renderer.get_or_create_badge(&chat_label, [255, 64, 129, 250], [255, 255, 255, 255]);
+            if let Ok(elem) = MemoryRenderBufferRenderElement::from_buffer(
+                renderer,
+                Point::from(((alice_pos.x as i32 + 18) as f64, (alice_pos.y as i32 - 30) as f64)),
+                &chat_buf,
+                None,
+                None,
+                None,
+                Kind::Unspecified,
+            ) {
+                all_elements.push(KnotRenderElement::Memory(elem));
+            }
+        }
         let alice_tag_buf = self.badge_renderer.get_or_create_badge(
             "ALICE",
             [255, 64, 129, 255],
@@ -128,8 +143,23 @@ impl KnotRenderer {
         }
         draw_cursor(&mut all_elements, alice_pos, alice_color);
 
-        // Render Bob Cursor (Cyan) + "BOB" Badge
+        // Render Bob Cursor (Cyan) + "BOB" Badge + Cursor Chat
         let bob_pos = state.seat_manager.bob().location;
+        if let Some(chat) = state.seat_manager.bob().active_cursor_chat() {
+            let chat_label = format!("💬 {}", chat);
+            let chat_buf = self.badge_renderer.get_or_create_badge(&chat_label, [0, 229, 255, 250], [255, 255, 255, 255]);
+            if let Ok(elem) = MemoryRenderBufferRenderElement::from_buffer(
+                renderer,
+                Point::from(((bob_pos.x as i32 + 18) as f64, (bob_pos.y as i32 - 30) as f64)),
+                &chat_buf,
+                None,
+                None,
+                None,
+                Kind::Unspecified,
+            ) {
+                all_elements.push(KnotRenderElement::Memory(elem));
+            }
+        }
         let bob_tag_buf = self.badge_renderer.get_or_create_badge(
             "BOB",
             [0, 229, 255, 255],
@@ -251,7 +281,7 @@ impl KnotRenderer {
         }
 
         // =========================================================================
-        // LAYER 3 (OVERLAY): Top Center HUD Pills (Active Seat & Launch App Button)
+        // LAYER 3 (OVERLAY): Top Center HUD Pills (Active Seat, Launcher & Net Status)
         // =========================================================================
         let (hud_text, hud_bg) = if active_user_id == 0 {
             ("ACTIVE: ALICE [TAB]", [255, 64, 129, 240])
@@ -265,7 +295,7 @@ impl KnotRenderer {
         );
         if let Ok(elem) = MemoryRenderBufferRenderElement::from_buffer(
             renderer,
-            Point::from((460.0, 14.0)),
+            Point::from((360.0, 14.0)),
             &hud_badge,
             None,
             None,
@@ -283,8 +313,32 @@ impl KnotRenderer {
         );
         if let Ok(elem) = MemoryRenderBufferRenderElement::from_buffer(
             renderer,
-            Point::from((660.0, 14.0)),
+            Point::from((560.0, 14.0)),
             &launcher_btn_badge,
+            None,
+            None,
+            None,
+            Kind::Unspecified,
+        ) {
+            all_elements.push(KnotRenderElement::Memory(elem));
+        }
+
+        // Top HUD Multiplayer Net Status
+        let net_label = if state.connected_peers_count > 0 {
+            format!("🌐 {} PEER CONNECTED (: {})", state.connected_peers_count, state.network_port)
+        } else {
+            format!("🌐 MULTIPLAYER READY (: {})", state.network_port)
+        };
+        let net_bg = if state.connected_peers_count > 0 {
+            [0, 229, 255, 240] // Cyan
+        } else {
+            [55, 65, 81, 220]  // Slate gray
+        };
+        let net_badge = self.badge_renderer.get_or_create_badge(&net_label, net_bg, [255, 255, 255, 255]);
+        if let Ok(elem) = MemoryRenderBufferRenderElement::from_buffer(
+            renderer,
+            Point::from((800.0, 14.0)),
+            &net_badge,
             None,
             None,
             None,

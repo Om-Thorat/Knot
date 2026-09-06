@@ -150,7 +150,8 @@ impl AppCatalog {
                 .unwrap_or(0);
             let island_socket = format!("wayland-island-{}-{}", pid, timestamp % 100000);
 
-            // 1. Locate knot-island binary
+            // 1. Locate knot-island binary and runtime directory
+            let runtime_dir = std::env::var("XDG_RUNTIME_DIR").unwrap_or_else(|_| "/run/user/1000".to_string());
             let island_bin = match std::env::current_exe() {
                 Ok(exe) => {
                     let dir = exe.parent().unwrap_or_else(|| std::path::Path::new("."));
@@ -169,6 +170,8 @@ impl AppCatalog {
                 .arg(&island_socket)
                 .arg("--parent-socket")
                 .arg(&parent_sock)
+                .env("XDG_RUNTIME_DIR", &runtime_dir)
+                .env("WAYLAND_DISPLAY", &parent_sock)
                 .spawn() {
                     Ok(child) => child,
                     Err(err) => {
@@ -178,8 +181,7 @@ impl AppCatalog {
                 };
 
             // 2. Poll for socket availability
-            let runtime_dir = std::env::var("XDG_RUNTIME_DIR").unwrap_or_else(|_| "/run/user/1000".to_string());
-            let socket_path = PathBuf::from(runtime_dir).join(&island_socket);
+            let socket_path = PathBuf::from(&runtime_dir).join(&island_socket);
 
             let mut ready = false;
             for _ in 0..60 {
@@ -229,6 +231,14 @@ impl AppCatalog {
                     let tmp_dir = format!("/tmp/knot-chrome-{}-{}", pid, timestamp % 10000);
                     let _ = std::fs::create_dir_all(&tmp_dir);
                     app_args.push(format!("--user-data-dir={}", tmp_dir));
+                }
+            } else if app_clone.command == "ptyxis" {
+                if !app_args.iter().any(|a| a == "-s" || a == "--standalone") {
+                    app_args.push("--standalone".to_string());
+                }
+            } else if app_clone.command == "gnome-text-editor" {
+                if !app_args.iter().any(|a| a == "--standalone") {
+                    app_args.push("--standalone".to_string());
                 }
             }
 

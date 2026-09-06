@@ -113,6 +113,7 @@ impl IslandClientState {
                     surface.attach(Some(&buffer), 0, 0);
                     surface.damage_buffer(0, 0, width, height);
                     surface.commit();
+                    pool.destroy();
                     debug!("🖼️ [BUFFER FORWARDED] Frame ({}x{}) committed to parent knot-core", width, height);
                 }
                 Err(err) => {

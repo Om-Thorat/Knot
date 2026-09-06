@@ -43,14 +43,28 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         state.display_handle.insert_client(stream, std::sync::Arc::new(server::IslandClientData::default())).unwrap();
     })?;
 
-    // 2. Connect as client to parent knot-core compositor
-    info!("🔗 Connecting to parent Knot compositor on socket: {}", args.parent_socket);
-    std::env::set_var("WAYLAND_DISPLAY", &args.parent_socket);
-    
-    let parent_conn = match Connection::connect_to_env() {
-        Ok(c) => Some(c),
+    // 2. Connect as client to parent knot-core compositor directly via Unix socket
+    let runtime_dir = std::env::var("XDG_RUNTIME_DIR").unwrap_or_else(|_| "/run/user/1000".to_string());
+    let socket_path = if args.parent_socket.starts_with('/') {
+        std::path::PathBuf::from(&args.parent_socket)
+    } else {
+        std::path::PathBuf::from(&runtime_dir).join(&args.parent_socket)
+    };
+
+    info!("🔗 Connecting directly to parent Knot compositor at: {:?}", socket_path);
+    let parent_conn = match std::os::unix::net::UnixStream::connect(&socket_path) {
+        Ok(stream) => match Connection::from_socket(stream) {
+            Ok(c) => {
+                info!("✅ Connected directly to parent compositor at {:?}!", socket_path);
+                Some(c)
+            }
+            Err(err) => {
+                error!("⚠️ Failed to initialize wayland connection from socket: {:?}", err);
+                None
+            }
+        },
         Err(err) => {
-            error!("⚠️ Could not connect to parent compositor {}: {}", args.parent_socket, err);
+            error!("⚠️ Could not connect to parent socket at {:?}: {:?}", socket_path, err);
             None
         }
     };
@@ -66,32 +80,25 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     });
     let parent_qh = parent_event_queue.as_ref().map(|q| q.handle());
 
-    // Synchronous initial roundtrip to discover parent globals and create parent toplevel surface
-    if let (Some(ref conn), Some(ref mut queue)) = (&parent_conn, &mut parent_event_queue) {
-        let _ = queue.roundtrip(&mut client_state);
-        let qh = queue.handle();
-        client_state.ensure_surface_created(&qh);
-        let _ = conn.flush();
-        let _ = queue.roundtrip(&mut client_state);
-    }
-
     info!("🌟 Knot Island active: Listening on WAYLAND_DISPLAY={}", args.socket);
 
     while state.is_running {
         // Dispatch incoming parent compositor events
         if let (Some(ref conn), Some(ref mut queue)) = (&parent_conn, &mut parent_event_queue) {
+            if let Err(_) = conn.flush() {
+                break;
+            }
             if let Some(guard) = conn.prepare_read() {
-                if let Err(err) = guard.read() {
-                    debug!("Parent connection disconnected: {:?}", err);
+                if let Err(_) = guard.read() {
                     break;
                 }
             }
-            if let Err(err) = queue.dispatch_pending(&mut client_state) {
-                debug!("Dispatch pending error: {:?}", err);
+            if let Err(_) = queue.dispatch_pending(&mut client_state) {
                 break;
             }
-            if let Err(err) = conn.flush() {
-                debug!("Conn flush error: {:?}", err);
+            let qh = queue.handle();
+            client_state.ensure_surface_created(&qh);
+            if let Err(_) = conn.flush() {
                 break;
             }
         }
@@ -118,8 +125,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             for frame in state.drain_pending_frames() {
                 client_state.forward_buffer_frame(qh, frame.width, frame.height, frame.stride, &frame.bytes);
             }
-            if let Err(err) = conn.flush() {
-                debug!("Conn flush error on frame commit: {:?}", err);
+            if let Err(_) = conn.flush() {
                 break;
             }
         }
@@ -136,20 +142,17 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             );
         }
 
-        if let Err(err) = display.dispatch_clients(&mut state) {
-            debug!("Client dispatch error: {:?}", err);
+        if let Err(_) = display.dispatch_clients(&mut state) {
             break;
         }
-        if let Err(err) = display.flush_clients() {
-            debug!("Client flush error: {:?}", err);
+        if let Err(_) = display.flush_clients() {
             break;
         }
-        if let Err(err) = event_loop.dispatch(Some(Duration::from_millis(16)), &mut state) {
-            debug!("Event loop error: {:?}", err);
+        if let Err(_) = event_loop.dispatch(Some(Duration::from_millis(4)), &mut state) {
             break;
         }
     }
 
-    info!("🏝️ Knot Island shutting down cleanly.");
+    info!("🏝️ Knot Island shut down gracefully.");
     Ok(())
 }

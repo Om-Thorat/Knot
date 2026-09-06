@@ -1,3 +1,4 @@
+use std::time::Instant;
 use smithay::{
     input::{
         keyboard::KeyboardHandle,
@@ -19,6 +20,8 @@ pub struct KnotUser {
     pub pointer: PointerHandle<KnotState>,
     pub keyboard: KeyboardHandle<KnotState>,
     pub focused_window_title: Option<String>,
+    pub cursor_chat: Option<(String, Instant)>,
+    pub is_remote: bool,
 }
 
 impl KnotUser {
@@ -42,6 +45,22 @@ impl KnotUser {
             pointer,
             keyboard,
             focused_window_title: None,
+            cursor_chat: None,
+            is_remote: false,
         }
+    }
+
+    pub fn set_cursor_chat(&mut self, text: String) {
+        self.cursor_chat = Some((text, Instant::now()));
+    }
+
+    pub fn active_cursor_chat(&self) -> Option<&str> {
+        if let Some((ref text, timestamp)) = self.cursor_chat {
+            // Keep speech bubble visible for 5 seconds
+            if timestamp.elapsed().as_secs() < 5 {
+                return Some(text.as_str());
+            }
+        }
+        None
     }
 }

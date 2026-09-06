@@ -328,4 +328,260 @@ impl KnotInputHandler {
 
         let _ = state.display_handle.flush_clients();
     }
+
+    pub fn handle_remote_pointer_motion(state: &mut KnotState, location: Point<f64, Logical>) {
+        state.seat_manager.bob_mut().location = location;
+        let pointer = state.seat_manager.bob().pointer.clone();
+
+        // Handle active window dragging
+        if let Some((ref window, grab_offset)) = state.drag_state {
+            let new_loc = Point::from(((location.x - grab_offset.x) as i32, (location.y - grab_offset.y) as i32));
+            state.space.map_element(window.clone(), new_loc, false);
+            return;
+        }
+
+        let mut focus = None;
+        if !state.launcher_state.is_open {
+            for window in state.space.elements() {
+                if let Some(win_loc) = state.space.element_location(window) {
+                    let rel_point = location - win_loc.to_f64();
+                    if let Some((surface, surf_offset)) = window.surface_under(rel_point, WindowSurfaceType::ALL) {
+                        let surface_global_origin = win_loc.to_f64() + surf_offset.to_f64();
+                        focus = Some((surface, surface_global_origin));
+                        break;
+                    }
+                }
+            }
+        }
+
+        let serial = SERIAL_COUNTER.next_serial();
+        pointer.motion(
+            state,
+            focus,
+            &MotionEvent {
+                location,
+                serial,
+                time: state.start_time.elapsed().as_millis() as u32,
+            },
+        );
+        pointer.frame(state);
+        let _ = state.display_handle.flush_clients();
+    }
+
+    pub fn handle_remote_pointer_button(state: &mut KnotState, button: u32, pressed: bool) {
+        let location = state.seat_manager.bob().location;
+        let pointer = state.seat_manager.bob().pointer.clone();
+        let keyboard = state.seat_manager.bob().keyboard.clone();
+        let user_name = state.seat_manager.bob().name.clone();
+        let user_color = state.seat_manager.bob().color_hex;
+
+        let serial = SERIAL_COUNTER.next_serial();
+
+        info!(
+            "🌐🖱️ [REMOTE MOUSE CLICK] User: {} | Button: {} | Pressed: {} | Pos: ({:.1}, {:.1})",
+            user_name, button, pressed, location.x, location.y
+        );
+
+        // 1. Check if clicking on Top HUD [+ LAUNCH APP] Button
+        if pressed && button == 272 && location.x >= 550.0 && location.x <= 790.0 && location.y >= 10.0 && location.y <= 42.0 {
+            info!("🎯 [REMOTE LAUNCHER BUTTON CLICKED] Toggling App Palette!");
+            state.toggle_launcher();
+            return;
+        }
+
+        // 2. Handle clicks when App Launcher is Open
+        if state.launcher_state.is_open {
+            if pressed && button == 272 {
+                let modal_x = 320.0;
+                let modal_w = 640.0;
+                let modal_y = 100.0;
+                let modal_h = 510.0;
+                let row_start_y = 192.0;
+
+                // Click inside catalog rows
+                if location.x >= modal_x + 14.0 && location.x <= modal_x + modal_w - 14.0 && location.y >= row_start_y && location.y <= modal_y + modal_h - 10.0 {
+                    let row_idx = ((location.y - row_start_y) / 58.0) as usize;
+                    let filtered = state.launcher_state.filtered_catalog();
+                    if row_idx < filtered.len() {
+                        info!("🚀 Remote user clicked app row #{} in catalog: '{}'!", row_idx + 1, filtered[row_idx].title);
+                        state.launch_filtered_index(row_idx);
+                        return;
+                    }
+                }
+
+                // Click outside modal closes it
+                if location.x < modal_x || location.x > modal_x + modal_w || location.y < modal_y || location.y > modal_y + modal_h {
+                    state.launcher_state.is_open = false;
+                    info!("🚪 Remote clicked outside modal, closing launcher.");
+                    return;
+                }
+            }
+            return;
+        }
+
+        // Resolve surface and global origin for the click position
+        let mut found_target = None;
+        let mut focus = None;
+        if !state.launcher_state.is_open {
+            for window in state.space.elements() {
+                if let Some(win_loc) = state.space.element_location(window) {
+                    let rel_point = location - win_loc.to_f64();
+                    if let Some((surface, surf_offset)) = window.surface_under(rel_point, WindowSurfaceType::ALL) {
+                        let surface_global_origin = win_loc.to_f64() + surf_offset.to_f64();
+                        focus = Some((surface.clone(), surface_global_origin));
+                        found_target = Some((window.clone(), surface, win_loc));
+                        break;
+                    }
+                }
+            }
+        }
+
+        // 1. Ensure pointer has focus on the target surface so the button event is dispatched to the client
+        pointer.motion(
+            state,
+            focus,
+            &MotionEvent {
+                location,
+                serial,
+                time: state.start_time.elapsed().as_millis() as u32,
+            },
+        );
+
+        // 2. Dispatch the button press/release event
+        pointer.button(
+            state,
+            &ButtonEvent {
+                serial,
+                time: state.start_time.elapsed().as_millis() as u32,
+                button,
+                state: if pressed {
+                    smithay::backend::input::ButtonState::Pressed
+                } else {
+                    smithay::backend::input::ButtonState::Released
+                },
+            },
+        );
+        pointer.frame(state);
+
+        if pressed {
+            if let Some((window, surface, loc)) = found_target {
+                info!(
+                    "🎯 [REMOTE WINDOW FOCUS GRABBED] User: {} ({}) | Window at ({}, {}) | Setting Keyboard Focus!",
+                    user_name, user_color, loc.x, loc.y
+                );
+                state.space.raise_element(&window, true);
+
+                // Check if clicking in the top titlebar / header region (y <= 42px) to initiate drag
+                let rel_y = location.y - loc.y as f64;
+                let rel_x = location.x - loc.x as f64;
+                let win_geo = window.geometry();
+
+                if button == 272 && rel_y <= 42.0 && rel_x < (win_geo.size.w as f64 - 100.0) {
+                    info!("✋ [REMOTE HEADER DRAG INITIATED] Dragging window from titlebar");
+                    state.drag_state = Some((window.clone(), Point::from((location.x - loc.x as f64, location.y - loc.y as f64))));
+                }
+
+                keyboard.set_focus(state, Some(surface), serial);
+                if let Some(toplevel) = window.toplevel() {
+                    toplevel.with_pending_state(|s| {
+                        s.states.set(XdgState::Activated);
+                    });
+                    toplevel.send_configure();
+                }
+            }
+        } else {
+            if state.drag_state.is_some() {
+                info!("🛑 [REMOTE DRAG RELEASED]");
+            }
+            state.drag_state = None;
+        }
+        let _ = state.display_handle.flush_clients();
+    }
+
+    pub fn handle_remote_key(state: &mut KnotState, keycode: Keycode, pressed: bool) {
+        let keyboard = state.seat_manager.bob().keyboard.clone();
+        let serial = SERIAL_COUNTER.next_serial();
+        let raw = keycode.raw();
+
+        info!(
+            "🌐⌨️ [REMOTE KEY EVENT] User: {} | Keycode: {:?} (raw: {}) | Pressed: {}",
+            state.seat_manager.bob().name, keycode, raw, pressed
+        );
+
+        // Check for Super/Windows key (raw 133 or 125) to toggle launcher
+        if pressed && (raw == 133 || raw == 125) {
+            info!("🌟 [REMOTE SUPER KEY] Toggling App Launcher!");
+            state.toggle_launcher();
+            return;
+        }
+
+        // Handle navigation and search typing when Launcher is open
+        if state.launcher_state.is_open {
+            if pressed {
+                match raw {
+                    // Escape (XKB 9 / evdev 1)
+                    9 | 1 => {
+                        state.launcher_state.is_open = false;
+                        info!("🚪 [ESC] Remote closed launcher modal.");
+                        return;
+                    }
+                    // Backspace (XKB 22 / evdev 14)
+                    22 | 14 => {
+                        state.launcher_state.query.pop();
+                        state.launcher_state.selected_index = 0;
+                        info!("🔍 [REMOTE SEARCH BACKSPACE] Query: '{}'", state.launcher_state.query);
+                        return;
+                    }
+                    // Up Arrow (XKB 111 / evdev 103)
+                    111 | 103 => {
+                        state.launcher_select_prev();
+                        return;
+                    }
+                    // Down Arrow (XKB 116 / evdev 108)
+                    116 | 108 => {
+                        state.launcher_select_next();
+                        return;
+                    }
+                    // Enter / Return (XKB 36 / evdev 28)
+                    36 | 28 => {
+                        state.launch_selected();
+                        return;
+                    }
+                    _ => {
+                        // Quick 1-key launch with numbers if query is empty
+                        if state.launcher_state.query.is_empty() && (10..=16).contains(&raw) {
+                            let idx = (raw - 10) as usize;
+                            if idx < state.launcher_state.catalog.len() {
+                                state.launch_filtered_index(idx);
+                                return;
+                            }
+                        }
+
+                        // Otherwise append character to search query
+                        if let Some(ch) = Self::raw_to_char(raw) {
+                            state.launcher_state.query.push(ch);
+                            state.launcher_state.selected_index = 0;
+                            info!("🔍 [REMOTE SEARCH TYPED] Query: '{}'", state.launcher_state.query);
+                            return;
+                        }
+                    }
+                }
+            }
+            return;
+        }
+
+        keyboard.input::<(), _>(
+            state,
+            keycode,
+            if pressed {
+                smithay::backend::input::KeyState::Pressed
+            } else {
+                smithay::backend::input::KeyState::Released
+            },
+            serial,
+            state.start_time.elapsed().as_millis() as u32,
+            |_, _, _| FilterResult::Forward,
+        );
+        let _ = state.display_handle.flush_clients();
+    }
 }
